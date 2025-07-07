@@ -1,3 +1,45 @@
+# Azure DevOps Setup for GitHub Integration
+
+## 🔐 Required Azure DevOps Configuration
+
+### 1. **Service Connections** (Required)
+Go to: `Project Settings → Service connections`
+
+**Create GitHub Service Connection:**
+1. Click "New service connection"
+2. Select "GitHub"
+3. Choose "Personal Access Token"
+4. Enter your GitHub PAT with these scopes:
+   - `repo` (repository access)
+   - `read:org` (organization access)
+   - `read:project` (project access)
+
+### 2. **Variable Groups** (Recommended)
+Go to: `Pipelines → Library → Variable groups`
+
+**Create Variable Group "GitHubIntegration":**
+```yaml
+Variables:
+  GITHUB_TOKEN: $(github-pat)  # Link to GitHub PAT
+  GITHUB_ORG: your-organization-name
+  REPO_NAME: common-culture
+```
+
+### 3. **Pipeline Permissions**
+Go to: `Project Settings → Security`
+
+**Required Pipeline Permissions:**
+- ✅ View build definition
+- ✅ Edit build pipeline
+- ✅ Queue builds
+- ✅ View releases
+
+## 🚀 Updated Azure Pipeline Configuration
+
+Here's the production-ready pipeline configuration:
+
+```yaml
+# Azure DevOps Pipeline for GitHub-based Common Code Tracking
 trigger:
   branches:
     include:
@@ -10,9 +52,11 @@ pool:
   vmImage: ubuntu-latest
 
 variables:
-  # Track your team's extensions/wrappers of common code
-  COMMON_DIRECTORY: "sth/robert_common" # Your team's extensions to track
-  TRACKING_FILE: "usage_report.md" # Markdown file for better readability
+- group: GitHubIntegration  # Links to the variable group you created
+- name: COMMON_DIRECTORY
+  value: "sth/robert_common"
+- name: TRACKING_FILE
+  value: "usage_report.md"
 
 stages:
   - stage: TrackCommonReuse
@@ -26,29 +70,20 @@ stages:
             fetchDepth: 0
             displayName: "Checkout Repository with Full History"
 
-          # STEP 2: Install and setup GitHub CLI
+          # STEP 2: Install GitHub CLI
           - script: |
               echo "Installing GitHub CLI..."
-              
-              # Install GitHub CLI
               curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
               echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
               sudo apt update && sudo apt install gh -y
-              
-              # Verify installation
               gh --version
-              
-              echo "GitHub CLI installed successfully"
             displayName: "Install GitHub CLI"
 
-          # STEP 3: Authenticate with GitHub (requires GitHub PAT in Azure DevOps variables)
+          # STEP 3: Authenticate with GitHub
           - script: |
               echo "Configuring GitHub authentication..."
-              
-              # Check if GITHUB_TOKEN is available
               if [ -z "$(GITHUB_TOKEN)" ]; then
                 echo "⚠️  GITHUB_TOKEN not configured. Some features will be limited."
-                echo "Add your GitHub Personal Access Token to Azure DevOps pipeline variables."
               else
                 echo "$(GITHUB_TOKEN)" | gh auth login --with-token
                 gh auth status
@@ -56,7 +91,7 @@ stages:
               fi
             displayName: "Setup GitHub Authentication"
             env:
-              GITHUB_TOKEN: $(GITHUB_TOKEN)  # Add this as a secret variable in Azure DevOps
+              GITHUB_TOKEN: $(GITHUB_TOKEN)
 
           # STEP 4: Generate comprehensive usage report
           - script: |
@@ -83,7 +118,7 @@ stages:
               echo "" >> $(TRACKING_FILE)
               
               # Recent activity
-              echo "## � Recent Activity (Last 7 Days)" >> $(TRACKING_FILE)
+              echo "## 📈 Recent Activity (Last 7 Days)" >> $(TRACKING_FILE)
               echo "" >> $(TRACKING_FILE)
               echo "```" >> $(TRACKING_FILE)
               git log --oneline --since="7 days ago" -- $(COMMON_DIRECTORY)/ | head -10 >> $(TRACKING_FILE) 2>/dev/null || echo "No recent changes" >> $(TRACKING_FILE)
@@ -111,23 +146,20 @@ stages:
               echo "*Report generated on $(date) by Azure DevOps Pipeline*" >> $(TRACKING_FILE)
               
               echo "✅ Usage report generated successfully"
-              
             displayName: "Generate Usage Report"
 
           # STEP 5: GitHub Integration (if authenticated)
           - script: |
               echo "Attempting GitHub integration..."
               
-              # Try to get repository info
               if gh auth status >/dev/null 2>&1; then
                 echo "🔍 Searching GitHub for cross-repository usage..."
                 
-                # Try to search for usage across GitHub
                 echo "" >> $(TRACKING_FILE)
-                echo "## � Cross-Repository Usage (GitHub Search)" >> $(TRACKING_FILE)
+                echo "## 🌐 Cross-Repository Usage (GitHub Search)" >> $(TRACKING_FILE)
                 echo "" >> $(TRACKING_FILE)
                 
-                # Search for usage in GitHub (requires authentication and org access)
+                # Search for usage in GitHub
                 gh search code "sth.robert_common language:python" --json repository,path --limit 10 2>/dev/null | \
                   jq -r '.[] | "- [\(.path)](\(.repository.html_url)/blob/main/\(.path)) in \(.repository.full_name)"' >> $(TRACKING_FILE) || \
                   echo "- No cross-repository usage found (requires org-level access)" >> $(TRACKING_FILE)
@@ -162,3 +194,27 @@ stages:
               echo "📄 Full report published as pipeline artifact: 'common-code-usage-report'"
               echo "🔗 Download the report from the pipeline run artifacts section"
             displayName: "Display Report Summary"
+```
+
+## 🎯 **Key Features of This Pipeline:**
+
+1. **Triggers only on changes** to `sth/robert_common/**`
+2. **Uses GitHub CLI** for cross-repository analysis
+3. **Generates comprehensive reports** with statistics and usage details
+4. **Publishes artifacts** that you can download
+5. **Handles authentication failures** gracefully
+6. **Provides detailed logging** for troubleshooting
+
+## 📋 **Prerequisites Checklist:**
+
+- [ ] GitHub Personal Access Token created
+- [ ] Azure DevOps Variable Group "GitHubIntegration" created
+- [ ] GITHUB_TOKEN variable added to the group (marked as secret)
+- [ ] Pipeline references the variable group correctly
+
+## 🚀 **Next Steps:**
+
+1. Copy this YAML to your Azure DevOps pipeline
+2. Save and run the pipeline
+3. Check the artifacts for your usage report
+4. Review the pipeline logs for any issues
