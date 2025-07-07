@@ -1,0 +1,59 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # Track your team's extensions/wrappers of common code
+  # This tracks what useful code your team created that other teams might want to use
+  # In real scenarios: you extend src/common in your team directory (sth/robert_common)
+  # and other teams import your extensions when they find them useful
+
+  COMMON_DIRECTORY: "sth/robert_common" # Your team's extensions to track
+  TRACKING_FILE: "tracking.yaml" # YAML file storing cross-team usage analytics
+
+stages:
+  - stage: TrackCommonReuse
+    displayName: Tracking Reused Common Code
+    jobs:
+      - job: TrackImports
+        displayName: Inspect Imports and Update Tracking File
+        steps:
+          # STEP 1: Clone the repo
+          - task: Checkout@1
+            displayName: "Checkout the Repository"
+
+          # STEP 2: Install Python dependencies
+          - script: |
+              echo "Installing Python dependencies"
+              pip install -r common_tracker/requirements.txt
+            displayName: "Install Dependencies"
+
+          # STEP 3: Run the analysis script (track imports)
+          - script: |
+              echo "Running Import Tracking Script"
+              cd common_tracker
+              python track_imports.py --common_dir $(COMMON_DIRECTORY) --tracking_file $(TRACKING_FILE)
+            displayName: "Run Tracking Script"
+
+          # STEP 4: Commit tracking.yaml to the repo if it was updated
+          - script: |
+              echo "Checking for tracking file updates"
+              if git diff --quiet HEAD; then
+                echo "No changes detected, skipping commit"
+              else
+                git config user.email "ado-bot@example.com"  # Bot email
+                git config user.name "ADO Bot"               # Bot name
+                git add $(TRACKING_FILE)
+                git commit -m "Updated tracking file for common usage"
+                git push origin HEAD
+              fi
+            displayName: "Commit Updated Tracking File"
