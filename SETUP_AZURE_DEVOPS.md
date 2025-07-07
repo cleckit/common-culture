@@ -205,16 +205,66 @@ stages:
 5. **Handles authentication failures** gracefully
 6. **Provides detailed logging** for troubleshooting
 
+## 🚨 **Common Issues & Solutions**
+
+### **Issue: "No hosted parallelism has been purchased or granted"**
+
+**This is a Microsoft limitation for Azure DevOps hosted agents.**
+
+#### **Solution 1: Request Free Parallelism (Recommended)**
+1. Fill out the form: https://aka.ms/azpipelines-parallelism-request
+2. **Requirements:**
+   - Valid Azure DevOps organization
+   - Public project (recommended)
+   - Brief explanation of your project
+3. **Wait time:** Usually 2-3 business days for approval
+
+#### **Solution 2: Use Self-Hosted Agent**
+```yaml
+# Replace the pool section in your pipeline with:
+pool:
+  name: 'Default'  # Use your self-hosted agent pool
+  # OR
+  name: 'your-self-hosted-pool-name'
+
+# Instead of:
+# pool:
+#   vmImage: ubuntu-latest  # This requires hosted parallelism
+```
+
+#### **Solution 3: Switch to GitHub Actions (Alternative)**
+Since you're already using GitHub, you can use the GitHub Actions workflow instead:
+- File: `.github/workflows/track-common-usage.yml`
+- GitHub provides 2000 free minutes/month for public repos
+- No additional setup required
+
+#### **Solution 4: Purchase Hosted Parallelism**
+- Cost: ~$40/month for Microsoft-hosted agents
+- Go to: `Organization Settings → Billing → Parallel jobs`
+
+### **Recommended Approach:**
+
+1. **Immediate:** Use GitHub Actions (already set up)
+2. **Long-term:** Request free Azure DevOps parallelism for more integration options
+
+### **GitHub Actions vs Azure DevOps Comparison:**
+
+| Feature | GitHub Actions | Azure DevOps |
+|---------|---------------|---------------|
+| **Cost** | Free (2000 min/month) | Requires parallelism request |
+| **Setup** | Already configured | Needs variable groups |
+| **Integration** | Native GitHub features | More enterprise features |
+| **Artifacts** | GitHub releases/pages | Azure DevOps artifacts |
+
+## 🎯 **Immediate Fix - Use GitHub Actions:**
+
+Your GitHub Actions workflow (`.github/workflows/track-common-usage.yml`) will work immediately without any parallelism restrictions!
+
+```bash
+# To trigger the GitHub Actions workflow:
+git add .
+git commit -m "feat: trigger GitHub Actions tracking workflow"
+git push origin main
+```
+
 ## 📋 **Prerequisites Checklist:**
-
-- [ ] GitHub Personal Access Token created
-- [ ] Azure DevOps Variable Group "GitHubIntegration" created
-- [ ] GITHUB_TOKEN variable added to the group (marked as secret)
-- [ ] Pipeline references the variable group correctly
-
-## 🚀 **Next Steps:**
-
-1. Copy this YAML to your Azure DevOps pipeline
-2. Save and run the pipeline
-3. Check the artifacts for your usage report
-4. Review the pipeline logs for any issues
