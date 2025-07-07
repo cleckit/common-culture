@@ -1,0 +1,116 @@
+# GitHub Actions workflow to track common code usage using GitHub's built-in tools
+name: Track Common Code Usage
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'sth/robert_common/**' ]  # Only trigger when your team's code changes
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  track-usage:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for better analysis
+    
+    - name: GitHub Code Search for Usage
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "## 🔍 Tracking Usage of sth/robert_common" >> usage_report.md
+        echo "" >> usage_report.md
+        
+        # Use GitHub's search API to find imports across the org
+        # This works if you have access to the organization's repos
+        
+        echo "### Files importing from sth.robert_common:" >> usage_report.md
+        
+        # Search for files containing imports from your modules
+        gh api search/code \
+          --method GET \
+          --field q="sth.robert_common language:python" \
+          --field per_page=100 \
+          --jq '.items[] | "- [\(.name)](\(.html_url)) (in \(.repository.full_name))"' >> usage_report.md || echo "No external usage found" >> usage_report.md
+    
+    - name: Analyze Recent Changes
+      run: |
+        echo "" >> usage_report.md
+        echo "### 📊 Recent Changes in sth/robert_common:" >> usage_report.md
+        echo "" >> usage_report.md
+        
+        # Get recent commits affecting your common directory
+        git log --oneline --since="7 days ago" -- sth/robert_common/ | head -10 >> usage_report.md || echo "No recent changes" >> usage_report.md
+        
+        echo "" >> usage_report.md
+        echo "### 📈 File Change Statistics:" >> usage_report.md
+        echo "" >> usage_report.md
+        
+        # Show which files in your common directory are most actively changed
+        git log --name-only --pretty=format: --since="30 days ago" -- sth/robert_common/ | \
+          grep -v '^$' | sort | uniq -c | sort -nr | head -10 >> usage_report.md
+    
+    - name: Create/Update Tracking Issue
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Create or update a GitHub issue to track usage
+        issue_title="🔄 Common Code Usage Report $(date +%Y-%m-%d)"
+        
+        # Check if there's an existing tracking issue this week
+        existing_issue=$(gh issue list --label "common-code-tracking" --state open --limit 1 --json number --jq '.[0].number')
+        
+        if [ "$existing_issue" != "null" ] && [ -n "$existing_issue" ]; then
+          echo "Updating existing issue #$existing_issue"
+          gh issue comment $existing_issue --body-file usage_report.md
+        else
+          echo "Creating new tracking issue"
+          gh issue create \
+            --title "$issue_title" \
+            --label "common-code-tracking,analytics" \
+            --body-file usage_report.md
+        fi
+
+  dependency-insights:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Generate Dependency Graph
+      run: |
+        echo "## 🕸️ Dependency Analysis" > dependency_report.md
+        echo "" >> dependency_report.md
+        
+        # Find all Python files that import from your common directory
+        echo "### Internal Dependencies:" >> dependency_report.md
+        echo "" >> dependency_report.md
+        
+        grep -r "from sth.robert_common" . --include="*.py" | \
+          sed 's/:.*from sth.robert_common/ imports from sth.robert_common/' >> dependency_report.md || echo "No internal dependencies found" >> dependency_report.md
+        
+        echo "" >> dependency_report.md
+        echo "### Most Imported Modules:" >> dependency_report.md
+        echo "" >> dependency_report.md
+        
+        # Count which of your modules are most imported
+        grep -r "from sth.robert_common" . --include="*.py" | \
+          cut -d':' -f2 | cut -d' ' -f2 | sort | uniq -c | sort -nr >> dependency_report.md || echo "No imports found" >> dependency_report.md
+    
+    - name: Comment on Commit
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Add dependency info as commit comment
+        gh api repos/${{ github.repository }}/commits/${{ github.sha }}/comments \
+          --method POST \
+          --field body="$(cat dependency_report.md)" || echo "Could not create commit comment"
