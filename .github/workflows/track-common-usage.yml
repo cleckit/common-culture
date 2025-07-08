@@ -1,5 +1,5 @@
-# GitHub Actions workflow to track common code usage using GitHub's built-in tools
-name: Track Common Code Usage & Create PR-based Issues
+# GitHub Actions workflow to create issues for PR merges affecting common code
+name: Track Common Code PR Changes
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
   pull-requests: read
 
 jobs:
-  create-pr-commit-issue:
+  create-pr-issue:
     runs-on: ubuntu-latest
     
     steps:
@@ -55,15 +55,10 @@ jobs:
             pr_title=$(echo "$pr_data" | jq -r '.title // "Unknown"')
             pr_author=$(echo "$pr_data" | jq -r '.author.login // "Unknown"')
             pr_url=$(echo "$pr_data" | jq -r '.url // ""')
-            pr_body=$(echo "$pr_data" | jq -r '.body // ""')
             
             echo "pr_title=$pr_title" >> $GITHUB_OUTPUT
             echo "pr_author=$pr_author" >> $GITHUB_OUTPUT  
             echo "pr_url=$pr_url" >> $GITHUB_OUTPUT
-            echo "pr_body_exists=true" >> $GITHUB_OUTPUT
-            
-            # Save PR body to file for later use
-            echo "$pr_body" > pr_body.txt
             echo "✅ Retrieved PR information for #$pr_number"
           else
             echo "⚠️  Could not retrieve PR #$pr_number information"
@@ -92,7 +87,7 @@ jobs:
         echo "total_common_files=$total_files" >> $GITHUB_OUTPUT
         echo "usage_statements=$usage_count" >> $GITHUB_OUTPUT
     
-    - name: Create Issue Report for PR Merge
+    - name: Create Issue for PR Merge
       if: steps.check_commit.outputs.is_pr_merge == 'true' && steps.analyze_changes.outputs.changed_count > 0
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -124,16 +119,6 @@ jobs:
           echo "" >> issue_body.md
         fi
         
-        # Original PR description (if available)
-        if [ "${{ steps.pr_info.outputs.pr_body_exists }}" = "true" ] && [ -s pr_body.txt ]; then
-          echo "## 📝 Original PR Description" >> issue_body.md
-          echo "" >> issue_body.md
-          echo "\`\`\`" >> issue_body.md
-          head -20 pr_body.txt >> issue_body.md  # Limit to first 20 lines
-          echo "\`\`\`" >> issue_body.md
-          echo "" >> issue_body.md
-        fi
-        
         # Files changed section
         echo "## � Files Changed in sth/robert_common" >> issue_body.md
         echo "" >> issue_body.md
@@ -151,7 +136,7 @@ jobs:
         echo "" >> issue_body.md
         
         # Current impact statistics
-        echo "## 📊 Current Impact Statistics" >> issue_body.md
+        echo "## � Current Impact Statistics" >> issue_body.md
         echo "" >> issue_body.md
         echo "- **Total files in sth/robert_common**: ${{ steps.analyze_changes.outputs.total_common_files }}" >> issue_body.md
         echo "- **Files using sth.robert_common**: ${{ steps.analyze_changes.outputs.usage_statements }}" >> issue_body.md
@@ -159,7 +144,7 @@ jobs:
         echo "" >> issue_body.md
         
         # Usage analysis
-        echo "## 🔍 Usage Analysis" >> issue_body.md
+        echo "## 🔍 Current Usage Analysis" >> issue_body.md
         echo "" >> issue_body.md
         echo "### Current Imports:" >> issue_body.md
         echo "\`\`\`" >> issue_body.md
@@ -167,34 +152,36 @@ jobs:
         echo "\`\`\`" >> issue_body.md
         echo "" >> issue_body.md
         
-        # Cross-repository search (if possible)
-        echo "### Cross-Repository Usage:" >> issue_body.md
-        echo "\`\`\`" >> issue_body.md
-        gh search code "sth.robert_common language:python" --json repository,path --limit 5 2>/dev/null | \
-          jq -r '.[] | "\(.repository.nameWithOwner): \(.path)"' >> issue_body.md || \
-          echo "Cross-repo search requires organization access" >> issue_body.md
-        echo "\`\`\`" >> issue_body.md
+        # Promotion consideration
+        echo "## 🎯 Promotion to src/common Consideration" >> issue_body.md
+        echo "" >> issue_body.md
+        echo "**Should this change be promoted to \`src/common\`?**" >> issue_body.md
+        echo "" >> issue_body.md
+        echo "- [ ] ✅ Yes - This is stable and should be available to all teams" >> issue_body.md
+        echo "- [ ] ⏳ Not yet - Needs more testing/refinement" >> issue_body.md
+        echo "- [ ] ❌ No - This is team-specific and should stay in \`sth/robert_common\`" >> issue_body.md
         echo "" >> issue_body.md
         
         # Action items
-        echo "## 📋 Recommended Actions" >> issue_body.md
+        echo "## 📋 Action Items" >> issue_body.md
         echo "" >> issue_body.md
         echo "- [ ] Review changes for breaking changes" >> issue_body.md
         echo "- [ ] Update documentation if APIs changed" >> issue_body.md
         echo "- [ ] Notify dependent teams if needed" >> issue_body.md
         echo "- [ ] Consider version bump if significant changes" >> issue_body.md
+        echo "- [ ] Evaluate for promotion to \`src/common\`" >> issue_body.md
         echo "" >> issue_body.md
         
         # Footer
         echo "---" >> issue_body.md
         echo "*This issue was auto-generated to track the impact of PR #$pr_number on common code.*" >> issue_body.md
-        echo "*Click on the commit link above to see the exact changes.*" >> issue_body.md
+        echo "*Use this issue to discuss whether these changes should be promoted to \`src/common\`.*" >> issue_body.md
         
         # Create the issue
         echo "Creating detailed tracking issue for PR #$pr_number..."
         issue_url=$(gh issue create \
           --title "$issue_title" \
-          --label "common-code-tracking,pr-analysis,commit-$commit_short" \
+          --label "common-code-tracking,pr-analysis,promotion-candidate" \
           --body-file issue_body.md)
         
         echo "✅ Created issue: $issue_url"
@@ -221,7 +208,7 @@ jobs:
         echo "- **Message**: ${{ github.event.head_commit.message }}" >> direct_commit_issue.md
         echo "- **Timestamp**: ${{ github.event.head_commit.timestamp }}" >> direct_commit_issue.md
         echo "" >> direct_commit_issue.md
-        echo "## � Files Changed" >> direct_commit_issue.md
+        echo "## 📂 Files Changed" >> direct_commit_issue.md
         
         if [ -s changed_files.txt ]; then
           while IFS= read -r file; do
@@ -238,74 +225,3 @@ jobs:
           --title "$issue_title" \
           --label "common-code-tracking,direct-commit,needs-review" \
           --body-file direct_commit_issue.md
-
-  dependency-insights:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Generate Dependency Graph
-      run: |
-        echo "## 🕸️ Dependency Analysis" > dependency_report.md
-        echo "" >> dependency_report.md
-        
-        # Find all Python files that import from your common directory
-        echo "### Internal Dependencies:" >> dependency_report.md
-        echo "" >> dependency_report.md
-        
-        grep -r "from sth.robert_common" . --include="*.py" | \
-          sed 's/:.*from sth.robert_common/ imports from sth.robert_common/' >> dependency_report.md || echo "No internal dependencies found" >> dependency_report.md
-        
-        echo "" >> dependency_report.md
-        echo "### Most Imported Modules:" >> dependency_report.md
-        echo "" >> dependency_report.md
-        
-        # Count which of your modules are most imported
-        grep -r "from sth.robert_common" . --include="*.py" | \
-          cut -d':' -f2 | cut -d' ' -f2 | sort | uniq -c | sort -nr >> dependency_report.md || echo "No imports found" >> dependency_report.md
-    
-    - name: Create Issue for This Commit with Detailed Analysis
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # Create a new issue for each commit affecting common code
-        commit_short="${{ github.sha }}"
-        commit_short="${commit_short:0:7}"
-        issue_title="📊 Dependency Impact Analysis - Commit $commit_short"
-        
-        # Add commit and dependency information
-        echo "## 🔗 Commit Information" > commit_analysis.md
-        echo "" >> commit_analysis.md
-        echo "- **Commit**: [\`$commit_short\`](${{ github.event.head_commit.url }})" >> commit_analysis.md
-        echo "- **Author**: ${{ github.event.head_commit.author.name }}" >> commit_analysis.md
-        echo "- **Message**: ${{ github.event.head_commit.message }}" >> commit_analysis.md
-        echo "- **Timestamp**: ${{ github.event.head_commit.timestamp }}" >> commit_analysis.md
-        echo "" >> commit_analysis.md
-        
-        # Add the dependency analysis from previous step
-        cat dependency_report.md >> commit_analysis.md
-        
-        # Add impact assessment
-        echo "" >> commit_analysis.md
-        echo "## 🎯 Impact Assessment" >> commit_analysis.md
-        echo "" >> commit_analysis.md
-        
-        # Count affected files
-        affected_files=$(grep -r "from sth.robert_common" . --include="*.py" | wc -l)
-        echo "- **Files potentially affected by this change**: $affected_files" >> commit_analysis.md
-        
-        # Get changed files in common directory
-        changed_files=$(git diff --name-only ${{ github.event.before }}..${{ github.sha }} -- sth/robert_common/ | wc -l)
-        echo "- **Common files modified in this commit**: $changed_files" >> commit_analysis.md
-        
-        # Create issue linking to this specific commit
-        echo "Creating detailed analysis issue for commit $commit_short"
-        issue_url=$(gh issue create \
-          --title "$issue_title" \
-          --label "common-code-tracking,dependency-analysis,commit-$commit_short" \
-          --body-file commit_analysis.md)
-        
-        echo "📋 Created issue: $issue_url"
