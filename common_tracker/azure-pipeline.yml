@@ -7,7 +7,7 @@ trigger:
       - sth/robert_common/**  # Only trigger when your team's code changes
 
 pool:
-  vmImage: ubuntu-latest
+  name: 'Common-Pool'
 
 variables:
   # Track your team's extensions/wrappers of common code
