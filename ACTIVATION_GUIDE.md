@@ -30,6 +30,8 @@
 gh auth login  # Use your PAT from step 1
 gh label create "common-code-tracking" --description "Issues tracking common code usage" --color "0E8A16"
 gh label create "analytics" --description "Analytics and metrics" --color "1D76DB"
+gh label create "commit-analysis" --description "Per-commit analysis reports" --color "FF6B35"
+gh label create "dependency-analysis" --description "Dependency impact analysis" --color "8B5A2B"
 ```
 
 ### **Phase 2: Azure DevOps Setup (10 minutes)**

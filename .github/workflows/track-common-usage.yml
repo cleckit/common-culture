@@ -1,5 +1,5 @@
 # GitHub Actions workflow to track common code usage using GitHub's built-in tools
-name: Track Common Code Usage
+name: Track Common Code Usage & Create PR-based Issues
 
 on:
   push:
@@ -9,10 +9,10 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: write
+  pull-requests: read
 
 jobs:
-  track-usage:
+  create-pr-commit-issue:
     runs-on: ubuntu-latest
     
     steps:
@@ -21,62 +21,223 @@ jobs:
       with:
         fetch-depth: 0  # Full history for better analysis
     
-    - name: GitHub Code Search for Usage
+    - name: Check if this is a squash-and-merge commit
+      id: check_commit
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "## 🔍 Tracking Usage of sth/robert_common" >> usage_report.md
-        echo "" >> usage_report.md
+        commit_message="${{ github.event.head_commit.message }}"
+        echo "Commit message: $commit_message"
         
-        # Use GitHub's search API to find imports across the org
-        # This works if you have access to the organization's repos
-        
-        echo "### Files importing from sth.robert_common:" >> usage_report.md
-        
-        # Search for files containing imports from your modules
-        gh api search/code \
-          --method GET \
-          --field q="sth.robert_common language:python" \
-          --field per_page=100 \
-          --jq '.items[] | "- [\(.name)](\(.html_url)) (in \(.repository.full_name))"' >> usage_report.md || echo "No external usage found" >> usage_report.md
-    
-    - name: Analyze Recent Changes
-      run: |
-        echo "" >> usage_report.md
-        echo "### 📊 Recent Changes in sth/robert_common:" >> usage_report.md
-        echo "" >> usage_report.md
-        
-        # Get recent commits affecting your common directory
-        git log --oneline --since="7 days ago" -- sth/robert_common/ | head -10 >> usage_report.md || echo "No recent changes" >> usage_report.md
-        
-        echo "" >> usage_report.md
-        echo "### 📈 File Change Statistics:" >> usage_report.md
-        echo "" >> usage_report.md
-        
-        # Show which files in your common directory are most actively changed
-        git log --name-only --pretty=format: --since="30 days ago" -- sth/robert_common/ | \
-          grep -v '^$' | sort | uniq -c | sort -nr | head -10 >> usage_report.md
-    
-    - name: Create/Update Tracking Issue
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # Create or update a GitHub issue to track usage
-        issue_title="🔄 Common Code Usage Report $(date +%Y-%m-%d)"
-        
-        # Check if there's an existing tracking issue this week
-        existing_issue=$(gh issue list --label "common-code-tracking" --state open --limit 1 --json number --jq '.[0].number')
-        
-        if [ "$existing_issue" != "null" ] && [ -n "$existing_issue" ]; then
-          echo "Updating existing issue #$existing_issue"
-          gh issue comment $existing_issue --body-file usage_report.md
+        # Check if this commit looks like a squash-and-merge (typically contains PR number)
+        if echo "$commit_message" | grep -qE "\(#[0-9]+\)"; then
+          echo "is_pr_merge=true" >> $GITHUB_OUTPUT
+          # Extract PR number
+          pr_number=$(echo "$commit_message" | grep -oE "#[0-9]+" | head -1 | tr -d '#')
+          echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
+          echo "✅ This appears to be a PR merge commit (PR #$pr_number)"
         else
-          echo "Creating new tracking issue"
-          gh issue create \
-            --title "$issue_title" \
-            --label "common-code-tracking,analytics" \
-            --body-file usage_report.md
+          echo "is_pr_merge=false" >> $GITHUB_OUTPUT
+          echo "ℹ️  This appears to be a direct commit (not a PR merge)"
         fi
+    
+    - name: Get PR Information (if available)
+      id: pr_info
+      if: steps.check_commit.outputs.is_pr_merge == 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        pr_number="${{ steps.check_commit.outputs.pr_number }}"
+        if [ -n "$pr_number" ]; then
+          echo "Fetching PR #$pr_number information..."
+          pr_data=$(gh pr view $pr_number --json title,author,url,body || echo "null")
+          if [ "$pr_data" != "null" ]; then
+            pr_title=$(echo "$pr_data" | jq -r '.title // "Unknown"')
+            pr_author=$(echo "$pr_data" | jq -r '.author.login // "Unknown"')
+            pr_url=$(echo "$pr_data" | jq -r '.url // ""')
+            pr_body=$(echo "$pr_data" | jq -r '.body // ""')
+            
+            echo "pr_title=$pr_title" >> $GITHUB_OUTPUT
+            echo "pr_author=$pr_author" >> $GITHUB_OUTPUT  
+            echo "pr_url=$pr_url" >> $GITHUB_OUTPUT
+            echo "pr_body_exists=true" >> $GITHUB_OUTPUT
+            
+            # Save PR body to file for later use
+            echo "$pr_body" > pr_body.txt
+            echo "✅ Retrieved PR information for #$pr_number"
+          else
+            echo "⚠️  Could not retrieve PR #$pr_number information"
+          fi
+        fi
+    
+    - name: Analyze Common Code Changes
+      id: analyze_changes
+      run: |
+        echo "🔍 Analyzing changes in sth/robert_common..."
+        
+        # Get files changed in this commit that affect common code
+        changed_files=$(git diff --name-only ${{ github.event.before }}..${{ github.sha }} -- sth/robert_common/ || echo "")
+        changed_count=$(echo "$changed_files" | grep -v '^$' | wc -l)
+        
+        echo "changed_count=$changed_count" >> $GITHUB_OUTPUT
+        echo "Files changed in sth/robert_common: $changed_count"
+        
+        # Save changed files list
+        echo "$changed_files" | grep -v '^$' > changed_files.txt || touch changed_files.txt
+        
+        # Get current usage statistics
+        total_files=$(find sth/robert_common -name "*.py" 2>/dev/null | wc -l || echo "0")
+        usage_count=$(grep -r "from sth.robert_common" . --include="*.py" 2>/dev/null | wc -l || echo "0")
+        
+        echo "total_common_files=$total_files" >> $GITHUB_OUTPUT
+        echo "usage_statements=$usage_count" >> $GITHUB_OUTPUT
+    
+    - name: Create Issue Report for PR Merge
+      if: steps.check_commit.outputs.is_pr_merge == 'true' && steps.analyze_changes.outputs.changed_count > 0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        commit_short="${{ github.sha }}"
+        commit_short="${commit_short:0:7}"
+        pr_number="${{ steps.check_commit.outputs.pr_number }}"
+        
+        # Create issue title
+        if [ -n "${{ steps.pr_info.outputs.pr_title }}" ]; then
+          issue_title="📊 Common Code Impact: PR #$pr_number - ${{ steps.pr_info.outputs.pr_title }}"
+        else
+          issue_title="📊 Common Code Impact: Commit $commit_short"
+        fi
+        
+        # Start building the issue body
+        echo "# 🔄 Common Code Changes Analysis" > issue_body.md
+        echo "" >> issue_body.md
+        
+        # PR Information section
+        if [ -n "${{ steps.pr_info.outputs.pr_url }}" ]; then
+          echo "## 🔗 Pull Request Information" >> issue_body.md
+          echo "" >> issue_body.md
+          echo "- **PR**: [#$pr_number](${{ steps.pr_info.outputs.pr_url }})" >> issue_body.md
+          echo "- **Title**: ${{ steps.pr_info.outputs.pr_title }}" >> issue_body.md
+          echo "- **Author**: @${{ steps.pr_info.outputs.pr_author }}" >> issue_body.md
+          echo "- **Merged Commit**: [\`$commit_short\`](${{ github.event.head_commit.url }})" >> issue_body.md
+          echo "- **Merged At**: ${{ github.event.head_commit.timestamp }}" >> issue_body.md
+          echo "" >> issue_body.md
+        fi
+        
+        # Original PR description (if available)
+        if [ "${{ steps.pr_info.outputs.pr_body_exists }}" = "true" ] && [ -s pr_body.txt ]; then
+          echo "## 📝 Original PR Description" >> issue_body.md
+          echo "" >> issue_body.md
+          echo "\`\`\`" >> issue_body.md
+          head -20 pr_body.txt >> issue_body.md  # Limit to first 20 lines
+          echo "\`\`\`" >> issue_body.md
+          echo "" >> issue_body.md
+        fi
+        
+        # Files changed section
+        echo "## � Files Changed in sth/robert_common" >> issue_body.md
+        echo "" >> issue_body.md
+        
+        if [ -s changed_files.txt ]; then
+          while IFS= read -r file; do
+            if [ -n "$file" ]; then
+              echo "- [\`$file\`](${{ github.event.repository.html_url }}/blob/${{ github.sha }}/$file)" >> issue_body.md
+            fi
+          done < changed_files.txt
+        else
+          echo "- No files changed in sth/robert_common" >> issue_body.md
+        fi
+        
+        echo "" >> issue_body.md
+        
+        # Current impact statistics
+        echo "## 📊 Current Impact Statistics" >> issue_body.md
+        echo "" >> issue_body.md
+        echo "- **Total files in sth/robert_common**: ${{ steps.analyze_changes.outputs.total_common_files }}" >> issue_body.md
+        echo "- **Files using sth.robert_common**: ${{ steps.analyze_changes.outputs.usage_statements }}" >> issue_body.md
+        echo "- **Files changed in this PR**: ${{ steps.analyze_changes.outputs.changed_count }}" >> issue_body.md
+        echo "" >> issue_body.md
+        
+        # Usage analysis
+        echo "## 🔍 Usage Analysis" >> issue_body.md
+        echo "" >> issue_body.md
+        echo "### Current Imports:" >> issue_body.md
+        echo "\`\`\`" >> issue_body.md
+        grep -r "from sth.robert_common" . --include="*.py" 2>/dev/null | head -10 >> issue_body.md || echo "No imports found" >> issue_body.md
+        echo "\`\`\`" >> issue_body.md
+        echo "" >> issue_body.md
+        
+        # Cross-repository search (if possible)
+        echo "### Cross-Repository Usage:" >> issue_body.md
+        echo "\`\`\`" >> issue_body.md
+        gh search code "sth.robert_common language:python" --json repository,path --limit 5 2>/dev/null | \
+          jq -r '.[] | "\(.repository.nameWithOwner): \(.path)"' >> issue_body.md || \
+          echo "Cross-repo search requires organization access" >> issue_body.md
+        echo "\`\`\`" >> issue_body.md
+        echo "" >> issue_body.md
+        
+        # Action items
+        echo "## 📋 Recommended Actions" >> issue_body.md
+        echo "" >> issue_body.md
+        echo "- [ ] Review changes for breaking changes" >> issue_body.md
+        echo "- [ ] Update documentation if APIs changed" >> issue_body.md
+        echo "- [ ] Notify dependent teams if needed" >> issue_body.md
+        echo "- [ ] Consider version bump if significant changes" >> issue_body.md
+        echo "" >> issue_body.md
+        
+        # Footer
+        echo "---" >> issue_body.md
+        echo "*This issue was auto-generated to track the impact of PR #$pr_number on common code.*" >> issue_body.md
+        echo "*Click on the commit link above to see the exact changes.*" >> issue_body.md
+        
+        # Create the issue
+        echo "Creating detailed tracking issue for PR #$pr_number..."
+        issue_url=$(gh issue create \
+          --title "$issue_title" \
+          --label "common-code-tracking,pr-analysis,commit-$commit_short" \
+          --body-file issue_body.md)
+        
+        echo "✅ Created issue: $issue_url"
+        echo "📋 This issue links PR #$pr_number to its impact on common code"
+    
+    - name: Create Issue for Direct Commits (non-PR)
+      if: steps.check_commit.outputs.is_pr_merge == 'false' && steps.analyze_changes.outputs.changed_count > 0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        commit_short="${{ github.sha }}"
+        commit_short="${commit_short:0:7}"
+        
+        issue_title="⚠️  Direct Commit to Common Code: $commit_short"
+        
+        # Create issue for direct commits (not PR merges)
+        echo "# ⚠️  Direct Commit Detected" > direct_commit_issue.md
+        echo "" >> direct_commit_issue.md
+        echo "A direct commit was made to common code without going through a PR." >> direct_commit_issue.md
+        echo "" >> direct_commit_issue.md
+        echo "## 🔗 Commit Information" >> direct_commit_issue.md
+        echo "- **Commit**: [\`$commit_short\`](${{ github.event.head_commit.url }})" >> direct_commit_issue.md
+        echo "- **Author**: ${{ github.event.head_commit.author.name }}" >> direct_commit_issue.md
+        echo "- **Message**: ${{ github.event.head_commit.message }}" >> direct_commit_issue.md
+        echo "- **Timestamp**: ${{ github.event.head_commit.timestamp }}" >> direct_commit_issue.md
+        echo "" >> direct_commit_issue.md
+        echo "## � Files Changed" >> direct_commit_issue.md
+        
+        if [ -s changed_files.txt ]; then
+          while IFS= read -r file; do
+            if [ -n "$file" ]; then
+              echo "- [\`$file\`](${{ github.event.repository.html_url }}/blob/${{ github.sha }}/$file)" >> direct_commit_issue.md
+            fi
+          done < changed_files.txt
+        fi
+        
+        echo "" >> direct_commit_issue.md
+        echo "**Recommendation**: Consider using PRs for common code changes to enable proper review and tracking." >> direct_commit_issue.md
+        
+        gh issue create \
+          --title "$issue_title" \
+          --label "common-code-tracking,direct-commit,needs-review" \
+          --body-file direct_commit_issue.md
 
   dependency-insights:
     runs-on: ubuntu-latest
@@ -106,11 +267,45 @@ jobs:
         grep -r "from sth.robert_common" . --include="*.py" | \
           cut -d':' -f2 | cut -d' ' -f2 | sort | uniq -c | sort -nr >> dependency_report.md || echo "No imports found" >> dependency_report.md
     
-    - name: Comment on Commit
+    - name: Create Issue for This Commit with Detailed Analysis
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # Add dependency info as commit comment
-        gh api repos/${{ github.repository }}/commits/${{ github.sha }}/comments \
-          --method POST \
-          --field body="$(cat dependency_report.md)" || echo "Could not create commit comment"
+        # Create a new issue for each commit affecting common code
+        commit_short="${{ github.sha }}"
+        commit_short="${commit_short:0:7}"
+        issue_title="📊 Dependency Impact Analysis - Commit $commit_short"
+        
+        # Add commit and dependency information
+        echo "## 🔗 Commit Information" > commit_analysis.md
+        echo "" >> commit_analysis.md
+        echo "- **Commit**: [\`$commit_short\`](${{ github.event.head_commit.url }})" >> commit_analysis.md
+        echo "- **Author**: ${{ github.event.head_commit.author.name }}" >> commit_analysis.md
+        echo "- **Message**: ${{ github.event.head_commit.message }}" >> commit_analysis.md
+        echo "- **Timestamp**: ${{ github.event.head_commit.timestamp }}" >> commit_analysis.md
+        echo "" >> commit_analysis.md
+        
+        # Add the dependency analysis from previous step
+        cat dependency_report.md >> commit_analysis.md
+        
+        # Add impact assessment
+        echo "" >> commit_analysis.md
+        echo "## 🎯 Impact Assessment" >> commit_analysis.md
+        echo "" >> commit_analysis.md
+        
+        # Count affected files
+        affected_files=$(grep -r "from sth.robert_common" . --include="*.py" | wc -l)
+        echo "- **Files potentially affected by this change**: $affected_files" >> commit_analysis.md
+        
+        # Get changed files in common directory
+        changed_files=$(git diff --name-only ${{ github.event.before }}..${{ github.sha }} -- sth/robert_common/ | wc -l)
+        echo "- **Common files modified in this commit**: $changed_files" >> commit_analysis.md
+        
+        # Create issue linking to this specific commit
+        echo "Creating detailed analysis issue for commit $commit_short"
+        issue_url=$(gh issue create \
+          --title "$issue_title" \
+          --label "common-code-tracking,dependency-analysis,commit-$commit_short" \
+          --body-file commit_analysis.md)
+        
+        echo "📋 Created issue: $issue_url"
