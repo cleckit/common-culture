@@ -28,18 +28,17 @@ stages:
 
           # STEP 2: Install and setup GitHub CLI
           - script: |
-              echo "Installing GitHub CLI..."
-              
-              # Install GitHub CLI
-              curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-              echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-              sudo apt update && sudo apt install gh -y
-              
-              # Verify installation
-              gh --version
-              
-              echo "GitHub CLI installed successfully"
-            displayName: "Install GitHub CLI"
+              echo "Checking for GitHub CLI (gh)..."
+              if command -v gh >/dev/null 2>&1; then
+                echo "✅ GitHub CLI found: $(gh --version | head -1)"
+              else
+                echo "❌ GitHub CLI not found. Installing..."
+                curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+                echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+                sudo apt update && sudo apt install gh -y
+                echo "✅ GitHub CLI installed: $(gh --version | head -1)"
+              fi
+            displayName: "Check & Install GitHub CLI if Needed"
 
           # STEP 3: Authenticate with GitHub (requires GitHub PAT in Azure DevOps variables)
           - script: |
